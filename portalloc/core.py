@@ -35,23 +35,50 @@ def load(path):
 
 def alloc(state, owner, key, counter):
     """给 owner+key 分一个端口。"""
-    used = state["allocated"]
-    for _pstr in used:
-        counter.scanned += 1
-    port = state["cursor"]
-    state["cursor"] = port + 1
-    used[str(port)] = {"owner": owner, "key": key}
-    state["keys"][owner + "|" + key] = port
-    state["by_owner"][owner] = state["by_owner"].get(owner, 0) + 1
+    keys = state["keys"]
+    k = owner + "|" + key
+    if k in keys:
+        return keys[k]
+    used_by_owner = state["by_owner"].get(owner, 0)
+    if used_by_owner >= state["quota"]:
+        return "quota_exceeded"
+    released = state["released"]
+    if released:
+        port = released.pop()
+    else:
+        port = _next_fresh(state, counter)
+        if port is None:
+            return "exhausted"
+    state["allocated"][str(port)] = {"owner": owner, "key": key}
+    keys[k] = port
+    state["by_owner"][owner] = used_by_owner + 1
     return port
+
+
+def _next_fresh(state, counter):
+    """按 cursor 在声明的区间里取下一个未用过的端口。"""
+    cursor = state["cursor"]
+    for lo, hi in state["ranges"]:
+        counter.scanned += 1
+        if cursor < lo:
+            cursor = lo
+        if cursor <= hi:
+            state["cursor"] = cursor + 1
+            return cursor
+    return None
 
 
 def free(state, port):
     """回收一个端口。"""
     used = state["allocated"]
     p = int(port)
-    if str(p) in used:
-        del used[str(p)]
+    pstr = str(p)
+    if pstr in used:
+        entry = used.pop(pstr)
+        owner = entry["owner"]
+        state["keys"].pop(owner + "|" + entry["key"], None)
+        state["by_owner"][owner] = state["by_owner"].get(owner, 1) - 1
+        state["released"].append(p)
         return True
     return False
 
